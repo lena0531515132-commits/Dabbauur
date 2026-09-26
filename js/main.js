@@ -3,7 +3,8 @@ import * as THREE from 'three';
 
 /* ============ 1) Config & helpers ============ */
 const LANES = [-2.3, 0, 2.3];
-const GRAV = 34, JUMP_V = 12.2;
+const GRAV = 36, JUMP_V = 12.6; // snappier arc: ~2.2m apex, ~0.7s air time
+const LANE_LERP = 13, COYOTE_T = 0.1, JBUF_T = 0.15; // responsive lane / coyote / jump-buffer
 const TRAIN_TOP = 2.75;
 const SAVE_KEY = 'coastal_best_v1';
 const $ = id => document.getElementById(id);
@@ -80,18 +81,21 @@ window.AudioSys = {
 
 /* ============ 3) Renderer / scene / camera ============ */
 window.G = { state: 'menu', speed: 0, dist: 0, coins: 0, score: 0, mult: 1, t: 0, pz: 0, stumble: 0, stumbleT: 0, shake: 0, slowMo: 1 };
-window.P = { lane: 1, x: 0, y: 0, vy: 0, grounded: true, sliding: false, slideT: 0, roof: false, dead: false, mesh: null, parts: {} };
+window.P = { lane: 1, x: 0, y: 0, vy: 0, grounded: true, sliding: false, slideT: 0, roof: false, dead: false, deathT: 0, coyote: 0, jbuf: 0, landT: 0, onRamp: false, mesh: null, parts: {} };
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x9fd4ef, 55, 300);
 const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 1500);
 let renderer = null, WEBGL_OK = true, RENDER_SCALE = 1;
+const IS_MOBILE = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) || innerWidth < 700;
 try {
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer = new THREE.WebGLRenderer({ antialias: !IS_MOBILE, powerPreference: 'high-performance' });
   renderer.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, IS_MOBILE ? 1.5 : 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  if (THREE.SRGBColorSpace !== undefined && 'outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+  if (THREE.ACESFilmicToneMapping !== undefined && 'toneMapping' in renderer) { renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05; }
 } catch (e) {
   // no GL (very old device / blocked context): menus/HUD/audio still work,
   // 3D appears once a context is available
@@ -110,24 +114,33 @@ try {
 $('game').appendChild(renderer.domElement);
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
-const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x3a5f4a, 0.9); scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff2d8, 1.6);
+const hemi = new THREE.HemisphereLight(0xcfe8ff, 0x3a5f4a, 1.0); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff2d8, 1.9);
 sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.mapSize.set(IS_MOBILE ? 512 : 1024, IS_MOBILE ? 512 : 1024);
 sun.shadow.camera.left = -25; sun.shadow.camera.right = 25;
 sun.shadow.camera.top = 30; sun.shadow.camera.bottom = -60;
 sun.shadow.camera.far = 160;
 scene.add(sun); scene.add(sun.target);
+const rim = new THREE.DirectionalLight(0x9adcff, 0.5); // cool bounce off the sea
+rim.position.set(-30, 14, -40); scene.add(rim);
 
 /* sky dome (gradient shader) */
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
-  uniforms: { top: { value: new THREE.Color(0x2f7fd0) }, bottom: { value: new THREE.Color(0xcfeefb) }, sunDir: { value: new THREE.Vector3(0.3, 0.5, -0.8) }, sunCol: { value: new THREE.Color(0xfff3c4) } },
+  uniforms: { top: { value: new THREE.Color(0x2f7fd0) }, bottom: { value: new THREE.Color(0xcfeefb) }, sunDir: { value: new THREE.Vector3(0.3, 0.5, -0.8) }, sunCol: { value: new THREE.Color(0xfff3c4) }, t: { value: 0 } },
   vertexShader: 'varying vec3 vP; void main(){ vP=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-  fragmentShader: 'varying vec3 vP; uniform vec3 top,bottom,sunDir,sunCol;' +
+  fragmentShader: 'varying vec3 vP; uniform vec3 top,bottom,sunDir,sunCol; uniform float t;' +
+    'float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }' +
+    'float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);' +
+    ' return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }' +
     'void main(){ float h=clamp(vP.y*1.4+0.12,0.0,1.0); vec3 c=mix(bottom,top,pow(h,0.75));' +
     'float s=pow(max(dot(normalize(vP),normalize(sunDir)),0.0),220.0); c+=sunCol*s*1.2;' +
     'float s2=pow(max(dot(normalize(vP),normalize(sunDir)),0.0),8.0); c+=sunCol*s2*0.18;' +
+    'vec2 cuv=vP.xz/(abs(vP.y)+0.25);' +
+    'float cl=vnoise(cuv*2.2+vec2(t*0.008,0.0))*0.6+vnoise(cuv*4.7+vec2(t*0.014,3.7))*0.4;' +
+    'float cmask=smoothstep(0.55,0.85,cl)*smoothstep(0.02,0.25,vP.y)*(1.0-smoothstep(0.55,0.9,vP.y));' +
+    'c=mix(c, vec3(1.0), cmask*0.75);' +
     'gl_FragColor=vec4(c,1.0); }'
 });
 const skyDome = new THREE.Mesh(new THREE.SphereGeometry(800, 24, 14), skyMat);
@@ -145,10 +158,10 @@ const stars = new THREE.Points(starGeo, starMat); stars.frustumCulled = false; s
 function canvasTex(w, h, draw) { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; }
 
 const seaUniformNote = { amp: 1 };
-const seaGeo = new THREE.PlaneGeometry(420, 460, 44, 44);
+const seaGeo = new THREE.PlaneGeometry(420, 460, IS_MOBILE ? 22 : 44, IS_MOBILE ? 22 : 44);
 seaGeo.rotateX(-Math.PI / 2);
 const seaBase = seaGeo.attributes.position.array.slice();
-const seaMat = new THREE.MeshPhongMaterial({ color: 0x0b6fa4, specular: 0x99ddff, shininess: 90, transparent: true, opacity: 0.96 });
+const seaMat = new THREE.MeshStandardMaterial({ color: 0x0b6fa4, roughness: 0.3, metalness: 0.55, transparent: true, opacity: 0.96 });
 const sea = new THREE.Mesh(seaGeo, seaMat);
 sea.position.set(-225, -1.6, -120); scene.add(sea);
 
@@ -166,11 +179,11 @@ const sandMat = new THREE.MeshLambertMaterial({ color: 0xe8d29a });
 const sand = new THREE.Mesh(new THREE.PlaneGeometry(13, 460), sandMat);
 sand.rotation.x = -Math.PI / 2; sand.position.set(-10.5, -1.05, -120); sand.receiveShadow = true; scene.add(sand);
 
-const groundMat = new THREE.MeshLambertMaterial({ color: 0x4a4f55 });
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x3d434b });
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(12, 460), groundMat);
 ground.rotation.x = -Math.PI / 2; ground.position.set(2, -1.12, -120); ground.receiveShadow = true; scene.add(ground);
 
-const promMat = new THREE.MeshLambertMaterial({ color: 0x8b8f96 });
+const promMat = new THREE.MeshLambertMaterial({ color: 0x9aa0a8 });
 const prom = new THREE.Mesh(new THREE.PlaneGeometry(30, 460), promMat);
 prom.rotation.x = -Math.PI / 2; prom.position.set(23, -1.08, -120); prom.receiveShadow = true; scene.add(prom);
 
@@ -246,7 +259,7 @@ function makeBuilding(w, h, d, mat, litRatio) {
 const buildings = [];
 for (let i = 0; i < 46; i++) {
   const w = rand(5, 9), h = rand(7, 26), d = rand(5, 9);
-  const b = makeBuilding(w, h, d, pick([bMatA, bMatB, bMatC, bMatD]), 0);
+  const b = makeBuilding(w, h, d, pick([bMatA, bMatB, bMatC, bMatD]), 0.4);
   b.position.x = rand(13, 60);
   b.userData.off = i * rand(9, 13);
   city.add(b); buildings.push(b);
@@ -330,11 +343,12 @@ const flash = new THREE.PointLight(0xbfd9ff, 0, 220); flash.position.set(-30, 30
 /* ============ 6) Player ============ */
 function buildPlayer() {
   const g = new THREE.Group();
-  const skin = new THREE.MeshLambertMaterial({ color: 0xf0c8a0 });
-  const shirt = new THREE.MeshLambertMaterial({ color: 0x00b4d8 });
-  const pants = new THREE.MeshLambertMaterial({ color: 0x223344 });
-  const shoeM = new THREE.MeshLambertMaterial({ color: 0xe63946 });
-  const capM = new THREE.MeshLambertMaterial({ color: 0xffc93d });
+  const std = (color, roughness = 0.75) => new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.05 });
+  const skin = std(0xf0c8a0, 0.6);
+  const shirt = std(0x00b4d8, 0.7);
+  const pants = std(0x223344, 0.8);
+  const shoeM = std(0xe63946, 0.55);
+  const capM = std(0xffc93d, 0.6);
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.72, 0.36), shirt); torso.position.y = 1.18; torso.castShadow = true; g.add(torso);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 12), skin); head.position.y = 1.82; head.castShadow = true; g.add(head);
   const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.29, 0.16, 12), capM); cap.position.y = 2.0; g.add(cap);
@@ -343,7 +357,7 @@ function buildPlayer() {
   const mkLeg = s => { const l = new THREE.Group(); const m = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.6, 0.21), pants); m.position.y = -0.3; m.castShadow = true; l.add(m); const f = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.34), shoeM); f.position.set(0, -0.62, -0.05); l.add(f); l.position.set(0.16 * s, 0.68, 0); return l; };
   const armL = mkArm(-1), armR = mkArm(1), legL = mkLeg(-1), legR = mkLeg(1);
   g.add(armL, armR, legL, legR);
-  const board = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 1.1), new THREE.MeshLambertMaterial({ color: 0xff6b35 }));
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 1.1), std(0xff6b35, 0.5));
   board.position.y = 0.06; board.visible = false; g.add(board);
   const blob = new THREE.Mesh(new THREE.CircleGeometry(0.55, 18), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false }));
   blob.rotation.x = -Math.PI / 2; blob.position.y = 0.02; g.add(blob);
@@ -492,12 +506,14 @@ for (let i = 0; i < 6; i++) {
 
 /* spawner: keeps ~2.2 screens of content ahead */
 let nextSpawnZ = -70;
+let lastFree = 1; // free lane of the previous hazard row (reachable-lane chaining)
 function clearAhead() {
   for (const t of trains) { t.active = false; t.mesh.visible = false; }
   for (const r of rampsA) { r.active = false; r.mesh.visible = false; }
   for (const p of powersA) { p.active = false; p.mesh.visible = false; }
   coinData.length = 0; coinMesh.count = 0; coinMesh.instanceMatrix.needsUpdate = true;
   nextSpawnZ = G.pz - 70;
+  lastFree = P.lane;
 }
 function freeLaneAt(z, margin, forTrain) {
   const busy = [false, false, false];
@@ -509,60 +525,86 @@ function freeLaneAt(z, margin, forTrain) {
   const free = [0, 1, 2].filter(l => !busy[l]);
   return free.length ? pick(free) : -1;
 }
+// free lane adjacent to (or same as) the previous row's free lane → never a 2-lane teleport
+function chainedFree() {
+  const opts = [0, 1, 2].sort((a, b) => (Math.abs(a - lastFree) + Math.random() * 0.9) - (Math.abs(b - lastFree) + Math.random() * 0.9));
+  return opts[0];
+}
 function spawnRow() {
   const z = nextSpawnZ, diff = clamp(G.dist / 1400, 0, 1);
+  const gapBase = clamp(G.speed * 0.85, 18, 30); // reaction gap grows with speed
+  // global guard: all 3 lanes busy here → emit a breather instead of an unfair wall
+  const jammed = [0, 1, 2].every(l => {
+    for (const t of trains) {
+      if (!t.active) continue;
+      if (t.lane === l && Math.abs(t.z - z) < t.len / 2 + 8) return true;
+    }
+    return false;
+  });
+  if (jammed) {
+    for (let i = 0; i < 6; i++) coinData.push({ x: LANES[i % 3], y: COIN_Y0, z: z + 4 - i * 2.2, taken: false });
+    nextSpawnZ -= 30;
+    return;
+  }
   const r = Math.random();
   if (r < 0.30 + diff * 0.12) {
     // static train wall (1-2 lanes), always ≥1 free lane
-    const lanes = [0, 1, 2].sort(() => Math.random() - 0.5);
+    const free = chainedFree();
+    const blocked = [0, 1, 2].filter(l => l !== free).sort(() => Math.random() - 0.5);
     const nT = Math.random() < 0.45 + diff * 0.25 ? 2 : 1;
     const len = rand(14, 22 + diff * 8);
     for (let i = 0; i < nT; i++) {
-      const l = lanes[i];
+      const l = blocked[i];
       spawnTrain(l, z - len / 2 + 1, len, false);
     }
+    lastFree = free;
     // coins on the free lane
-    const free = lanes[nT];
     for (let i = 0; i < 6; i++) coinData.push({ x: LANES[free], y: COIN_Y0, z: z + 4 - i * 2.2, taken: false });
-    nextSpawnZ -= len + rand(20, 30 - diff * 8);
+    nextSpawnZ -= len + rand(gapBase, gapBase + 10 - diff * 4);
   } else if (r < 0.46 + diff * 0.1) {
     // oncoming moving train
     const l = freeLaneAt(z, 26, true);
     if (l >= 0) {
       spawnTrain(l, z - 60, rand(13, 20), true, 1);
       $('warn').classList.remove('hidden'); setTimeout(() => $('warn').classList.add('hidden'), 1600);
-      for (let i = 0; i < 5; i++) coinData.push({ x: LANES[(l + i + 1) % 3], y: COIN_Y0, z: z + 4 - i * 2.4, taken: false });
+      // coins on ONE safe lane, never inside the train's lane (was a coin trap)
+      const safeLane = (l + 1 + randi(0, 1)) % 3; // one of the two non-train lanes
+      for (let i = 0; i < 5; i++) coinData.push({ x: LANES[safeLane], y: COIN_Y0, z: z + 4 - i * 2.4, taken: false });
     } else {
       for (let i = 0; i < 5; i++) coinData.push({ x: LANES[i % 3], y: COIN_Y0, z: z + 4 - i * 2.4, taken: false });
     }
-    nextSpawnZ -= rand(42, 58);
+    nextSpawnZ -= rand(gapBase + 22, gapBase + 36);
   } else if (r < 0.60) {
     // barrier + low block combo, jump or slide or dodge
-    const l1 = randi(0, 2); let l2 = randi(0, 2); if (l2 === l1) l2 = (l2 + 1) % 3;
+    const free = chainedFree();
+    const others = [0, 1, 2].filter(l => l !== free);
+    const l1 = others[0], l2 = others[1]; // barrier on one, low block on the other
     spawnProp(l1, z, 'barrier'); spawnProp(l2, z - 2, 'low');
-    const free = 3 - l1 - l2;
+    lastFree = free;
     if (Math.random() < 0.6) for (let i = 0; i < 5; i++) coinData.push({ x: LANES[free], y: COIN_Y0, z: z + 5 - i * 2.2, taken: false });
     else for (let i = 0; i < 4; i++) coinData.push({ x: LANES[l1], y: 1.9, z: z + 3 - i * 2.0, taken: false }); // jump arc coins
-    nextSpawnZ -= rand(26, 36);
+    nextSpawnZ -= rand(gapBase + 8, gapBase + 18);
   } else if (r < 0.72) {
     // ramp over a train → run on roof
-    const l = randi(0, 2);
+    let l = chainedFree();
+    if (freeLaneAt(z - 8, 12, false) !== l && freeLaneAt(z - 8, 12, false) >= 0) l = freeLaneAt(z - 8, 12, false);
     const len = rand(16, 22);
     spawnTrain(l, z - 8 - len / 2, len, false);
     spawnRamp(l, z + 2);
     for (let i = 0; i < 7; i++) coinData.push({ x: LANES[l], y: COIN_Y0 + 2.9, z: z - 6 - i * 2.6, taken: false });
-    nextSpawnZ -= len + rand(30, 42);
+    lastFree = l;
+    nextSpawnZ -= len + rand(gapBase + 12, gapBase + 24);
   } else if (r < 0.82) {
     // coin slalom
     const start = randi(0, 2);
     for (let i = 0; i < 12; i++) coinData.push({ x: LANES[(start + Math.floor(i / 4)) % 3], y: COIN_Y0 + (i % 4 === 2 ? 1.0 : 0), z: z + 4 - i * 2.4, taken: false });
     if (Math.random() < 0.35) spawnPower(z - 26);
-    nextSpawnZ -= rand(36, 48);
+    nextSpawnZ -= rand(gapBase + 16, gapBase + 28);
   } else if (r < 0.92) {
     // power-up gate
     spawnPower(z);
     for (let i = 0; i < 4; i++) coinData.push({ x: LANES[randi(0, 2)], y: COIN_Y0, z: z + 6 - i * 2.2, taken: false });
-    nextSpawnZ -= rand(30, 40);
+    nextSpawnZ -= rand(gapBase + 10, gapBase + 20);
   } else {
     // breather: coins only
     for (let i = 0; i < 8; i++) coinData.push({ x: LANES[i % 3], y: COIN_Y0, z: z + 4 - i * 2.2, taken: false });
@@ -570,6 +612,9 @@ function spawnRow() {
   }
 }
 function spawnProp(lane, z, kind) {
+  for (const t of trains) {
+    if (t.active && t.lane === lane && Math.abs(t.z - z) < 8) return; // never stack hazards in one lane
+  }
   for (const t of trains) {
     if (t.active || t.kind !== kind) continue;
     t.active = true; t.mesh.visible = true; t.lane = lane; t.z = z;
@@ -579,11 +624,15 @@ function spawnProp(lane, z, kind) {
 }
 function spawnRamp(lane, z) {
   for (const r of rampsA) {
+    if (r.active && r.lane === lane && Math.abs(r.z - z) < 12) return null;
+  }
+  for (const r of rampsA) {
     if (r.active) continue;
     r.active = true; r.mesh.visible = true; r.lane = lane; r.z = z;
     r.mesh.position.set(LANES[lane], -1.0, z);
     return r;
   }
+  return null;
 }
 const POW_KINDS = ['magnet', 'shield', 'mult', 'board'];
 function spawnPower(z, forceKind) {
@@ -591,6 +640,13 @@ function spawnPower(z, forceKind) {
     if (p.active) continue;
     p.active = true; p.mesh.visible = true;
     p.kind = forceKind || pick(POW_KINDS); p.lane = randi(0, 2); p.z = z;
+    // never bury a power-up inside a train body — shift it to a neighbouring lane
+    for (const t of trains) {
+      if (t.active && t.kind === 'train' && t.lane === p.lane && Math.abs(t.z - z) < t.len / 2 + 3) {
+        p.lane = (p.lane + 1) % 3;
+        break;
+      }
+    }
     p.mesh.position.set(LANES[p.lane], 0.1, z);
     p.icon.geometry = powGeo[p.kind]; p.icon.material = powMat[p.kind];
     if (p.kind === 'board') { p.icon.rotation.x = 0; } else p.icon.rotation.x = 0;
@@ -672,10 +728,20 @@ function doRight() { if (G.state !== 'play' || P.dead) return; if (P.lane < 2) {
 function doJump() {
   if (G.state !== 'play' || P.dead) return;
   if (P.sliding) { P.sliding = false; P.slideT = 0; }
-  if (P.grounded) { P.vy = JUMP_V * (G.stumble > 0 ? 0.85 : 1); P.grounded = false; P.roof = false; AudioSys.jump(); puff(P.x, 0.1, G.pz, 5); }
+  P.jbuf = JBUF_T; // buffered: also works just before landing
+  tryJump();
+}
+function tryJump() {
+  if (P.jbuf <= 0 || P.dead) return;
+  if (P.grounded || P.coyote > 0 || P.roof) {
+    P.vy = JUMP_V * (G.stumble > 0 ? 0.85 : 1);
+    P.grounded = false; P.coyote = 0; P.jbuf = 0; P.roof = null;
+    AudioSys.jump(); puff(P.x, 0.1, G.pz, 5);
+  }
 }
 function doSlide() {
   if (G.state !== 'play' || P.dead) return;
+  P.jbuf = 0;
   if (!P.grounded) { P.vy = Math.min(P.vy, -16); } // slam down
   if (!P.sliding) { P.sliding = true; P.slideT = 0.75; AudioSys.slideSfx(); puff(P.x, 0.2, G.pz, 4); }
   else P.slideT = 0.75;
@@ -705,6 +771,7 @@ function resetWorld() {
   G.speed = 13; G.dist = 0; G.coins = 0; G.score = 0; G.mult = 1; G.t = 0; G.pz = 0;
   G.stumble = 0; G.stumbleT = 0; G.shake = 0; G.slowMo = 1;
   P.lane = 1; P.x = 0; P.y = 0; P.vy = 0; P.grounded = true; P.sliding = false; P.slideT = 0; P.roof = null; P.dead = false;
+  P.deathT = 0; P.coyote = COYOTE_T; P.jbuf = 0; P.landT = 0; P.onRamp = false;
   P.mesh.rotation.set(0, 0, 0); P.mesh.scale.set(1, 1, 1); P.mesh.visible = true;
   P.parts.board.visible = false;
   POW.magnet = POW.shield = POW.mult = POW.board = 0;
@@ -779,16 +846,31 @@ function playerLocalHead() { return P.sliding ? 0.5 : 1.9; }
 
 function updatePlayer(dt) {
   const targetX = LANES[P.lane];
-  P.x = lerp(P.x, targetX, Math.min(1, dt * 11));
+  // lane change: fast ease-out + slight overshoot feel via clamped lean (no oscillation)
+  P.x = lerp(P.x, targetX, Math.min(1, dt * LANE_LERP));
+  if (Math.abs(P.x - targetX) < 0.02) P.x = targetX;
+  // coyote time + jump buffer (Subway-Surfers-grade forgiveness)
+  if (P.coyote > 0) P.coyote -= dt;
+  if (P.jbuf > 0) { P.jbuf -= dt; tryJump(); }
   // vertical
   if (!P.grounded || P.vy !== 0) {
-    P.vy -= GRAV * dt;
+    // higher gravity while falling = snappy, controllable arc; low-g while rising holding space
+    const fallMult = P.vy > 0 ? 1 : 1.6;
+    P.vy -= GRAV * fallMult * dt;
+    P.vy = Math.max(P.vy, -30); // terminal velocity
     P.y += P.vy * dt;
     if (P.y <= 0) {
-      if (!P.grounded && P.vy < -9) { puff(P.x, 0.1, G.pz, 6); AudioSys.noise(0.12, 0.1, 900); }
+      const impact = P.vy;
+      if (!P.grounded && impact < -9) { puff(P.x, 0.1, G.pz, 6); AudioSys.noise(0.12, 0.1, 900); P.landT = clamp(-impact / 30, 0.12, 0.32); }
+      else if (!P.grounded) P.landT = 0.08;
       P.y = 0; P.vy = 0; P.grounded = true;
+      P.coyote = COYOTE_T;
+      if (P.jbuf > 0) tryJump(); // buffered jump fires on touchdown
     } else if (P.y > 0.05) P.grounded = false;
+  } else {
+    P.coyote = COYOTE_T;
   }
+  if (P.landT > 0) P.landT -= dt;
   // roof support check
   if (P.roof) {
     const t = P.roof;
@@ -819,21 +901,33 @@ function updatePlayer(dt) {
   } else if (!P.grounded) {
     const air = clamp(P.vy / JUMP_V, -1, 1);
     m.rotation.set(air > 0 ? -0.25 : 0.35, lean * 0.5, lean * 0.3);
-    P.parts.legL.rotation.x = -0.7; P.parts.legR.rotation.x = 0.5;
-    P.parts.armL.rotation.x = -2.4; P.parts.armR.rotation.x = -2.4;
+    // tucked jump pose eases toward the landing crouch instead of snapping
+    const tuck = clamp(1 - Math.abs(P.vy) / JUMP_V, 0.25, 1);
+    P.parts.legL.rotation.x = lerp(P.parts.legL.rotation.x, -0.7 * tuck, Math.min(1, dt * 10));
+    P.parts.legR.rotation.x = lerp(P.parts.legR.rotation.x, 0.55 * tuck, Math.min(1, dt * 10));
+    P.parts.armL.rotation.x = lerp(P.parts.armL.rotation.x, -2.4, Math.min(1, dt * 8));
+    P.parts.armR.rotation.x = lerp(P.parts.armR.rotation.x, -2.4, Math.min(1, dt * 8));
   } else {
     m.rotation.set(0.08, lean * 0.6, lean * 0.25);
+    // run cycle blends in over ~150ms after landing so feet never snap
+    const blend = P.landT > 0 ? 1 - P.landT / 0.32 : 1;
     const ph = G.t * (7 + G.speed * 0.55);
+    const amp = 0.95 * (0.35 + 0.65 * blend);
     const s = Math.sin(ph), c = Math.sin(ph + Math.PI);
-    P.parts.legL.rotation.x = s * 0.95; P.parts.legR.rotation.x = c * 0.95;
-    P.parts.armL.rotation.x = c * 0.85; P.parts.armR.rotation.x = s * 0.85;
+    // slight knee-lift asymmetry + torso bob sells the sprint without foot-slide
+    P.parts.legL.rotation.x = s * amp; P.parts.legR.rotation.x = c * amp;
+    P.parts.armL.rotation.x = c * amp * 0.9; P.parts.armR.rotation.x = s * amp * 0.9;
+    m.position.y += Math.abs(Math.cos(ph)) * 0.05 * blend;
     P.parts.armL.rotation.z = 0.15; P.parts.armR.rotation.z = -0.15;
     if (G.speed > 4 && Math.sin(ph) > 0.92) puff(P.x + rand(-0.2, 0.2), 0.02, G.pz + 0.5, 1);
   }
   // landing squash
-  const targetSY = (!P.grounded) ? 1.02 : (P.sliding ? 0.72 : 1);
-  m.scale.y = lerp(m.scale.y, targetSY, dt * 10);
-  m.scale.x = m.scale.z = lerp(m.scale.x, 2 - targetSY > 1 ? 1 : 1 + (1 - targetSY) * 0.6, dt * 10);
+  const landDip = P.landT > 0 ? (P.landT / 0.32) * 0.22 : 0; // deep crouch right after touchdown
+  const targetSY = (!P.grounded) ? 1.02 : (P.sliding ? 0.72 : 1 - landDip);
+  m.scale.y = lerp(m.scale.y, targetSY, Math.min(1, dt * 12));
+  const targetSXZ = 1 + (1 - targetSY) * 0.6;
+  m.scale.x = lerp(m.scale.x, targetSXZ, Math.min(1, dt * 12));
+  m.scale.z = lerp(m.scale.z, targetSXZ, Math.min(1, dt * 12));
   // blob shadow
   P.parts.blob.material.opacity = clamp(0.32 - P.y * 0.06, 0.08, 0.32);
   const bs = 1 + P.y * 0.12; P.parts.blob.scale.set(bs, bs, 1);
@@ -855,14 +949,15 @@ function checkCollisions() {
     if (dz > 5 || dz < -5.5) continue;
     const k = (G.pz - r.z + 4.5) / 9;
     if (k >= 0 && k <= 1.05) {
-      const h = k * 3.0;
+      const h = k * k * (3 - 2 * k) * 3.0; // smoothstep: flat entry/exit, no ramp pop
       if (feet <= h + 0.6) {
         P.y = Math.max(P.y, h); P.vy = 0; P.grounded = true; P.onRamp = true; P.roof = null;
         if (Math.random() < 0.5) puff(P.x, P.y, G.pz, 1);
       }
     } else if (k > 1.05 && k < 1.6 && P.grounded && feet > 2.2) {
       // launched off the lip!
-      P.vy = 6.5; P.grounded = false; P.onRamp = false;
+      // preserve climb momentum so the lip launch always clears the gap onto the roof
+      P.vy = Math.max(6.5, G.speed * 0.28); P.grounded = false; P.onRamp = false;
       AudioSys.jump();
     }
   }
@@ -871,36 +966,46 @@ function checkCollisions() {
     if (!t.active) continue;
     const dz = t.z - G.pz;
     if (Math.abs(dz) > t.len / 2 + 1.4) continue;
-    if (Math.abs(P.x - LANES[t.lane]) > 1.0) continue;
+    if (Math.abs(P.x - LANES[t.lane]) > 0.85) continue; // forgiving hitbox while mid lane-change
     if (t.kind === 'train') {
       if (P.roof === t) continue;
       if (P.onRamp) continue;
       if (feet >= ROOF_Y - 0.3) {
-        if (P.vy <= 0.5) { P.y = ROOF_Y; P.vy = 0; P.grounded = true; P.roof = t; puff(P.x, P.y, G.pz, 3); }
+        // snap down only when actually falling onto the deck — rising past the edge never sticks
+        if (P.vy <= 0.5 && feet <= ROOF_Y + 0.7) { P.y = ROOF_Y; P.vy = 0; P.grounded = true; P.roof = t; puff(P.x, P.y, G.pz, 3); }
         continue;
       }
       if (head > 0.35 && feet < ROOF_Y - 0.25) {
+        // side-swipe while fully on a neighbour lane edge: stumble, not death
+        if (Math.abs(P.x - LANES[t.lane]) > 0.62 && !P.dead && feet < 0.05) {
+          if (hurtPlayer()) { die(); gameOver(); return; }
+          P.x = LANES[P.lane]; // nudge back into the safe lane
+          continue;
+        }
         if (t.moving && !t.horned) { t.horned = true; AudioSys.horn(); }
         // running on the ground straight into a train front: always fatal
-        if (P.grounded && feet < 0.05 && P.vy <= 0.01) { die(); gameOver(); return; }
+        if (P.grounded && feet < 0.05 && P.vy <= 0.01 && Math.abs(dz) < t.len / 2 + 1.0 && P.onRamp === false) { die(); gameOver(); return; }
         if (hurtPlayer()) { die(); gameOver(); return; }
       }
     } else if (t.kind === 'barrier') {
       if (P.sliding || feet > 1.0) continue; // slid under / jumped over
+      if (Math.abs(dz) > 1.05) continue; // thin hitbox: no early/late phantom hits
       if (head > 0.55 && feet < 1.05) { if (hurtPlayer()) { die(); gameOver(); return; } }
     } else { // low block
       if (feet > 0.95) continue; // jumped it
+      if (Math.abs(dz) > 0.95) continue;
       if (hurtPlayer()) { die(); gameOver(); return; }
     }
   }
   // coins
   const magnetR = POW.magnet > 0 ? 7 : 0;
+  const grabR = clamp(G.speed * 0.055, 0.9, 1.8); // pickup radius grows with speed (high-speed fairness)
   for (const c of coinData) {
     if (c.taken) continue;
     const dz = c.z - G.pz;
     if (dz > 3 || dz < -3) continue;
     const dx = Math.abs(c.x - P.x), dy = Math.abs(c.y - (P.y + 0.9));
-    if ((dx < 1.0 && dy < 1.4) || (magnetR && dx < magnetR && dy < magnetR && Math.abs(dz) < magnetR)) {
+    if ((dx < grabR && dy < 1.5) || (magnetR && dx < magnetR && dy < magnetR && Math.abs(dz) < magnetR)) {
       c.taken = true; G.coins++;
       const gain = 10 * (POW.mult > 0 ? 2 : 1);
       G.score += gain; AudioSys.coin();
@@ -910,8 +1015,8 @@ function checkCollisions() {
   // powers
   for (const p of powersA) {
     if (!p.active) continue;
-    if (Math.abs(p.z - G.pz) > 1.4) continue;
-    if (Math.abs(P.x - LANES[p.lane]) > 1.3) continue;
+    if (Math.abs(p.z - G.pz) > 1.8) continue;
+    if (Math.abs(P.x - LANES[p.lane]) > 1.5) continue;
     if (Math.abs(P.y + 0.9 - 0.6) > 2.4) continue;
     p.active = false; p.mesh.visible = false;
     givePower(p.kind);
@@ -923,7 +1028,7 @@ function updateEntities(dt) {
   for (const t of trains) {
     if (!t.active) continue;
     if (t.moving) {
-      t.z += 19 * dt; // oncoming
+      t.z += (19 + G.speed * 0.15) * dt; // oncoming, scales slightly with run speed
       if (!t.horned && t.z - G.pz < 90) { t.horned = true; AudioSys.horn(); }
     }
     t.mesh.position.z = t.z;
@@ -970,13 +1075,20 @@ function updateAmbient(dt) {
   skyDome.position.z = G.pz - 60; stars.position.z = G.pz - 60;
   sun.position.set(P.x + 18, 32, G.pz + 12);
   sun.target.position.set(0, -1, G.pz - 25); sun.target.updateMatrixWorld();
-  // sea waves
+  // sky drift + sea waves (3 layered swells; normals every 3rd frame for mobile)
+  if (skyMat.uniforms.t) skyMat.uniforms.t.value = G.t;
   const pos = seaGeo.attributes.position, amp = seaUniformNote.amp;
+  const wob = WX.cur === 'storm' ? 1.5 : 1;
   for (let i = 0; i < pos.count; i++) {
     const bx = seaBase[i * 3], bz = seaBase[i * 3 + 2];
-    pos.array[i * 3 + 1] = Math.sin(bx * 0.14 + G.t * 1.6) * 0.35 * amp + Math.cos(bz * 0.08 + G.t * 1.1) * 0.4 * amp;
+    pos.array[i * 3 + 1] =
+      Math.sin(bx * 0.14 + G.t * 1.6) * 0.35 * amp +
+      Math.cos(bz * 0.08 + G.t * 1.1) * 0.4 * amp +
+      Math.sin((bx + bz) * 0.05 + G.t * 2.3) * 0.22 * amp * wob;
   }
-  pos.needsUpdate = true; seaGeo.computeVertexNormals();
+  pos.needsUpdate = true;
+  updateAmbient._n = (updateAmbient._n || 0) + 1;
+  if (updateAmbient._n % 3 === 0) seaGeo.computeVertexNormals();
   foamTex.offset.y -= dt * (0.25 + amp * 0.15);
   foam.position.x = -16.5 + Math.sin(G.t * 0.9) * 1.1 * amp;
   foam2.position.x = -23 + Math.sin(G.t * 0.7 + 2) * 1.6 * amp;
@@ -1046,9 +1158,11 @@ function updateAmbient(dt) {
 function updateCamera(dt) {
   const px = P.mesh ? P.x : 0;
   const py = P.mesh ? P.y : 0;
-  const tx = px * 0.45, ty = 4.7 + py * 0.32, tz = G.pz + 8.4;
-  camera.position.x = lerp(camera.position.x, tx, Math.min(1, dt * 7));
-  camera.position.y = lerp(camera.position.y, ty, Math.min(1, dt * 7));
+  const airborne = P.grounded ? 0 : 1;
+  const tx = px * 0.45, ty = 4.7 + py * 0.32 - airborne * 0.15, tz = G.pz + 8.4;
+  const k = G.state === 'play' ? Math.min(1, dt * 7) : Math.min(1, dt * 3);
+  camera.position.x = lerp(camera.position.x, tx, k);
+  camera.position.y = lerp(camera.position.y, ty, k);
   camera.position.z = tz;
   if (G.shake > 0) {
     G.shake = Math.max(0, G.shake - dt * 1.6);
@@ -1057,8 +1171,8 @@ function updateCamera(dt) {
   }
   camera.lookAt(px * 0.7, 1.5 + py * 0.4, G.pz - 9);
   if (G.stumble) camera.rotation.z += Math.sin(G.t * 30) * 0.02;
-  const targetFov = 62 + (G.speed - 13) * 0.55;
-  if (Math.abs(camera.fov - targetFov) > 0.1) { camera.fov = lerp(camera.fov, targetFov, dt * 2); camera.updateProjectionMatrix(); }
+  const targetFov = 62 + (G.speed - 13) * 0.45;
+  if (Math.abs(camera.fov - targetFov) > 0.05) { camera.fov = lerp(camera.fov, targetFov, Math.min(1, dt * 2)); camera.updateProjectionMatrix(); }
 }
 
 function updateHUD() {
