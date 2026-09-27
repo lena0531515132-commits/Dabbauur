@@ -212,18 +212,8 @@ function updateSleepers() {
   sleeperMesh.instanceMatrix.needsUpdate = true;
 }
 
-/* catenary poles + wires */
+/* promenade lamp material (poles + overhead wires removed — they crossed the view) */
 const poleMat = new THREE.MeshLambertMaterial({ color: 0x2e3a44 });
-const poles = [];
-for (let i = 0; i < 30; i++) {
-  const g = new THREE.Group();
-  const post = new THREE.Mesh(new THREE.BoxGeometry(0.3, 7.2, 0.3), poleMat); post.position.y = 2.5; post.castShadow = true; g.add(post);
-  const arm = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.22, 0.22), poleMat); arm.position.y = 5.9; g.add(arm);
-  g.position.x = 0; scene.add(g); poles.push(g);
-}
-const wireMat = new THREE.MeshBasicMaterial({ color: 0x1c2228 });
-const wires = [];
-for (const lx of LANES) { const w = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 460), wireMat); w.position.set(lx, 5.55, -120); scene.add(w); wires.push(w); }
 
 /* lamps on promenade */
 const lampGroups = [], lampGlowMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
@@ -349,12 +339,36 @@ function buildPlayer() {
   const pants = std(0x223344, 0.8);
   const shoeM = std(0xe63946, 0.55);
   const capM = std(0xffc93d, 0.6);
+  const hairM = std(0x3a2a1c, 0.85);
+  const packM = std(0xff6b35, 0.8);
+  const eyeM = new THREE.MeshBasicMaterial({ color: 0x1c2430 });
+  // the character faces -z: INTO the screen, away from the chase camera
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.72, 0.36), shirt); torso.position.y = 1.18; torso.castShadow = true; g.add(torso);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 12), skin); head.position.y = 1.82; head.castShadow = true; g.add(head);
+  // face on the front (-z): eyes make the facing unmistakable
+  for (const ex of [-0.09, 0.09]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), eyeM); e.position.set(ex, 1.87, -0.24); g.add(e); }
+  const hair = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.17, 0.15), hairM); hair.position.set(0, 1.85, 0.1); g.add(hair);
   const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.29, 0.16, 12), capM); cap.position.y = 2.0; g.add(cap);
-  const brim = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.05, 0.3), capM); brim.position.set(0, 1.94, -0.32); g.add(brim);
-  const mkArm = s => { const a = new THREE.Group(); const m = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.62, 0.17), shirt); m.position.y = -0.28; m.castShadow = true; a.add(m); const h = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), skin); h.position.y = -0.6; a.add(h); a.position.set(0.42 * s, 1.5, 0); return a; };
-  const mkLeg = s => { const l = new THREE.Group(); const m = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.6, 0.21), pants); m.position.y = -0.3; m.castShadow = true; l.add(m); const f = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.34), shoeM); f.position.set(0, -0.62, -0.05); l.add(f); l.position.set(0.16 * s, 0.68, 0); return l; };
+  const brim = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.3), capM); brim.position.set(0, 1.95, -0.34); g.add(brim);
+  // backpack on the back (+z, toward camera): reads instantly as "facing away = running forward"
+  const pack = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.52, 0.2), packM); pack.position.set(0, 1.22, 0.27); pack.castShadow = true; g.add(pack);
+  // two-segment limbs with knee/elbow joints (Subway-Surfers-grade runner silhouette)
+  const mkArm = s => {
+    const a = new THREE.Group();
+    const up = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.32, 0.15), shirt); up.position.y = -0.16; up.castShadow = true; a.add(up);
+    const f = new THREE.Group(); f.position.y = -0.32;
+    const lo = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.3, 0.13), skin); lo.position.y = -0.15; lo.castShadow = true; f.add(lo);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), skin); hand.position.y = -0.32; f.add(hand);
+    a.add(f); a.position.set(0.4 * s, 1.5, 0); a.userData.fore = f; return a;
+  };
+  const mkLeg = s => {
+    const l = new THREE.Group();
+    const th = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.36, 0.2), pants); th.position.y = -0.18; th.castShadow = true; l.add(th);
+    const sh = new THREE.Group(); sh.position.y = -0.36;
+    const lo = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.34, 0.17), pants); lo.position.y = -0.17; lo.castShadow = true; sh.add(lo);
+    const f = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.12, 0.32), shoeM); f.position.set(0, -0.36, -0.06); sh.add(f);
+    l.add(sh); l.position.set(0.16 * s, 0.68, 0); l.userData.shin = sh; return l;
+  };
   const armL = mkArm(-1), armR = mkArm(1), legL = mkLeg(-1), legR = mkLeg(1);
   g.add(armL, armR, legL, legR);
   const board = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 1.1), std(0xff6b35, 0.5));
@@ -368,7 +382,7 @@ function buildPlayer() {
   bubble.position.y = 1.1; g.add(bubble);
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   blob.castShadow = false; ring.castShadow = false; bubble.castShadow = false;
-  P.parts = { torso, head, armL, armR, legL, legR, board, blob, ring, bubble };
+  P.parts = { torso, head, armL, armR, legL, legR, shinL: legL.userData.shin, shinR: legR.userData.shin, foreL: armL.userData.fore, foreR: armR.userData.fore, board, blob, ring, bubble };
   P.mesh = g; scene.add(g);
 }
 buildPlayer();
@@ -891,32 +905,54 @@ function updatePlayer(dt) {
   const lean = clamp((targetX - P.x) * 0.35, -0.6, 0.6);
   if (P.dead) {
     P.deathT += dt;
-    m.rotation.x = lerp(m.rotation.x, -Math.PI / 2.2, dt * 6);
+    m.rotation.x = lerp(m.rotation.x, Math.PI / 2.4, dt * 6); // knocked back by the train
     m.position.y = -0.95 + Math.max(0, P.y + P.deathT * 1.2 - P.deathT * P.deathT * 2.2);
     G.speed = lerp(G.speed, 0, dt * 4);
   } else if (P.sliding) {
     m.rotation.set(-1.1, lean * 0.4, 0);
     m.position.y -= 0.35;
+    // dive pose: legs trail flat, arms swept back
+    P.parts.legL.rotation.x = lerp(P.parts.legL.rotation.x, 0.25, Math.min(1, dt * 10));
+    P.parts.legR.rotation.x = lerp(P.parts.legR.rotation.x, 0.1, Math.min(1, dt * 10));
+    P.parts.shinL.rotation.x = lerp(P.parts.shinL.rotation.x, -0.2, Math.min(1, dt * 10));
+    P.parts.shinR.rotation.x = lerp(P.parts.shinR.rotation.x, -0.1, Math.min(1, dt * 10));
+    P.parts.armL.rotation.x = lerp(P.parts.armL.rotation.x, 1.9, Math.min(1, dt * 10));
+    P.parts.armR.rotation.x = lerp(P.parts.armR.rotation.x, 1.9, Math.min(1, dt * 10));
+    P.parts.foreL.rotation.x = lerp(P.parts.foreL.rotation.x, 0.3, Math.min(1, dt * 10));
+    P.parts.foreR.rotation.x = lerp(P.parts.foreR.rotation.x, 0.3, Math.min(1, dt * 10));
     if (P.grounded && G.speed > 4) puff(P.x, 0.05, G.pz + 0.6, 1);
   } else if (!P.grounded) {
     const air = clamp(P.vy / JUMP_V, -1, 1);
-    m.rotation.set(air > 0 ? -0.25 : 0.35, lean * 0.5, lean * 0.3);
+    m.rotation.set(air > 0 ? -0.22 : 0.12, lean * 0.5, lean * 0.3);
     // tucked jump pose eases toward the landing crouch instead of snapping
     const tuck = clamp(1 - Math.abs(P.vy) / JUMP_V, 0.25, 1);
-    P.parts.legL.rotation.x = lerp(P.parts.legL.rotation.x, -0.7 * tuck, Math.min(1, dt * 10));
-    P.parts.legR.rotation.x = lerp(P.parts.legR.rotation.x, 0.55 * tuck, Math.min(1, dt * 10));
-    P.parts.armL.rotation.x = lerp(P.parts.armL.rotation.x, -2.4, Math.min(1, dt * 8));
-    P.parts.armR.rotation.x = lerp(P.parts.armR.rotation.x, -2.4, Math.min(1, dt * 8));
+    P.parts.legL.rotation.x = lerp(P.parts.legL.rotation.x, -0.75 * tuck, Math.min(1, dt * 10));
+    P.parts.legR.rotation.x = lerp(P.parts.legR.rotation.x, 0.45 * tuck, Math.min(1, dt * 10));
+    P.parts.shinL.rotation.x = lerp(P.parts.shinL.rotation.x, -1.25 * tuck, Math.min(1, dt * 10));
+    P.parts.shinR.rotation.x = lerp(P.parts.shinR.rotation.x, -0.55 * tuck, Math.min(1, dt * 10));
+    // arms reach up-and-forward (was up-and-back: read as running backwards)
+    P.parts.armL.rotation.x = lerp(P.parts.armL.rotation.x, 2.1, Math.min(1, dt * 8));
+    P.parts.armR.rotation.x = lerp(P.parts.armR.rotation.x, 2.1, Math.min(1, dt * 8));
+    P.parts.foreL.rotation.x = lerp(P.parts.foreL.rotation.x, 0.5, Math.min(1, dt * 8));
+    P.parts.foreR.rotation.x = lerp(P.parts.foreR.rotation.x, 0.5, Math.min(1, dt * 8));
   } else {
-    m.rotation.set(0.08, lean * 0.6, lean * 0.25);
     // run cycle blends in over ~150ms after landing so feet never snap
     const blend = P.landT > 0 ? 1 - P.landT / 0.32 : 1;
     const ph = G.t * (7 + G.speed * 0.55);
     const amp = 0.95 * (0.35 + 0.65 * blend);
     const s = Math.sin(ph), c = Math.sin(ph + Math.PI);
-    // slight knee-lift asymmetry + torso bob sells the sprint without foot-slide
-    P.parts.legL.rotation.x = s * amp; P.parts.legR.rotation.x = c * amp;
-    P.parts.armL.rotation.x = c * amp * 0.9; P.parts.armR.rotation.x = s * amp * 0.9;
+    // sprint INTO the run: forward body lean (was +0.08 backward lean) + torso counter-twist
+    m.rotation.set(-(0.1 + Math.min(G.speed, 30) * 0.004), lean * 0.6 + s * 0.06, lean * 0.25);
+    // thighs swing; knees bend as the leg recovers forward, extend on stance
+    P.parts.legL.rotation.x = lerp(P.parts.legL.rotation.x, s * amp, Math.min(1, dt * 14));
+    P.parts.legR.rotation.x = lerp(P.parts.legR.rotation.x, c * amp, Math.min(1, dt * 14));
+    P.parts.shinL.rotation.x = -(0.1 + Math.max(0, s) * 1.15);
+    P.parts.shinR.rotation.x = -(0.1 + Math.max(0, c) * 1.15);
+    // arms pump opposite the legs, elbows bent ~90° like a real runner
+    P.parts.armL.rotation.x = lerp(P.parts.armL.rotation.x, c * amp * 0.9, Math.min(1, dt * 14));
+    P.parts.armR.rotation.x = lerp(P.parts.armR.rotation.x, s * amp * 0.9, Math.min(1, dt * 14));
+    P.parts.foreL.rotation.x = 1.2 + Math.max(0, c) * 0.4;
+    P.parts.foreR.rotation.x = 1.2 + Math.max(0, s) * 0.4;
     m.position.y += Math.abs(Math.cos(ph)) * 0.05 * blend;
     P.parts.armL.rotation.z = 0.15; P.parts.armR.rotation.z = -0.15;
     if (G.speed > 4 && Math.sin(ph) > 0.92) puff(P.x + rand(-0.2, 0.2), 0.02, G.pz + 0.5, 1);
@@ -1070,7 +1106,6 @@ function updateAmbient(dt) {
   sea.position.z = G.pz - 120; foam.position.z = G.pz - 120; foam2.position.z = G.pz - 120;
   sand.position.z = G.pz - 120; ground.position.z = G.pz - 120; prom.position.z = G.pz - 120;
   for (const r of rails) r.position.z = G.pz - 120;
-  for (const w of wires) w.position.z = G.pz - 120;
   rain.position.z = G.pz;
   skyDome.position.z = G.pz - 60; stars.position.z = G.pz - 60;
   sun.position.set(P.x + 18, 32, G.pz + 12);
@@ -1101,11 +1136,7 @@ function updateAmbient(dt) {
     }
     rp.needsUpdate = true;
   }
-  // poles / lamps wrap
-  for (let i = 0; i < poles.length; i++) {
-    const rel = (((i * 19 - G.pz) % 300) + 300) % 300;
-    poles[i].position.z = G.pz + 15 - rel;
-  }
+  // lamps wrap
   for (let i = 0; i < lampGroups.length; i++) {
     const rel = (((i * 41 - G.pz) % 300) + 300) % 300;
     lampGroups[i].position.z = G.pz + 15 - rel;
