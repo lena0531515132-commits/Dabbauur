@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>قطار الساحل 🌊 هروب لا نهائي</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌊</text></svg>"/>
+<link rel="stylesheet" href="css/style.css"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="game"></div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div class="hud-right">
+    <div class="pill score-pill">🏆 <span id="score">0</span></div>
+    <div class="pill coin-pill">🪙 <span id="coins">0</span></div>
+    <div class="pill dist-pill">🚀 <span id="speedVal">0</span> كم/س</div>
+  </div>
+  <div class="hud-left">
+    <div class="pill" id="weatherChip">☀️ <span id="weatherName">مشمس</span></div>
+    <button class="icon-btn" id="btnMute" title="الصوت">🔊</button>
+    <button class="icon-btn" id="btnPause" title="إيقاف">⏸️</button>
+  </div>
+</div>
+
+<div id="warn" class="hidden">⚠️ قطار قادم! <span>اخلِ المسار</span></div>
+<div id="powers" class="hidden"></div>
+<div id="countdown" class="hidden"></div>
+<div id="hint" class="hidden">⬅️ ➡️ للحركة &nbsp;•&nbsp; ⬆️ قفز &nbsp;•&nbsp; ⬇️ تزحلق<br/>اسحب على الشاشة في الموبايل</div>
+
+<!-- Start menu -->
+<div id="menu" class="overlay">
+  <div class="card">
+    <div class="logo">🌊🚂</div>
+    <h1>قطار الساحل</h1>
+    <p class="sub">هروب لا نهائي على خط الساحل • اهرب من القطارات واجمع العملات</p>
+    <div class="best">أفضل نتيجة: <b id="bestMenu">0</b></div>
+    <div class="controls-grid">
+      <div>⬅️ / ➡️<span>تغيير المسار</span></div>
+      <div>⬆️ / مسافة<span>قفز</span></div>
+      <div>⬇️<span>تزحلق</span></div>
+      <div>📱<span>اسحب على الشاشة</span></div>
+    </div>
+    <div class="tips">💡 اصعد المنحدرات لتجري فوق القطارات • المغناطيس والدرع والقوة ×2 في طريقك • الطقس يتغير!</div>
+    <button class="big-btn" id="btnStart">ابدأ الجري 🏃</button>
+  </div>
+</div>
+
+<!-- Pause -->
+<div id="pauseMenu" class="overlay hidden">
+  <div class="card">
+    <h2>⏸️ إيقاف مؤقت</h2>
+    <button class="big-btn" id="btnResume">استئناف ▶️</button>
+    <button class="ghost-btn" id="btnRestartP">إعادة البدء 🔄</button>
+    <button class="ghost-btn" id="btnMenuP">القائمة الرئيسية 🏠</button>
+  </div>
+</div>
+
+<!-- Game over -->
+<div id="over" class="overlay hidden">
+  <div class="card">
+    <h2>💥 اصطدمت بالقطار!</h2>
+    <div id="newBest" class="hidden">🎉 رقم قياسي جديد! 🎉</div>
+    <div class="stats">
+      <div>النتيجة<b id="finalScore">0</b></div>
+      <div>العملات<b id="finalCoins">0</b></div>
+      <div>المسافة<b id="finalDist">0 م</b></div>
+      <div>الأفضل<b id="bestOver">0</b></div>
+    </div>
+    <button class="big-btn" id="btnAgain">العب مجددًا 🔄</button>
+    <button class="ghost-btn" id="btnMenuO">القائمة الرئيسية 🏠</button>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
